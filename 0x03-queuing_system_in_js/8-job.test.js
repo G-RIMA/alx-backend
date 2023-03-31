@@ -1,113 +1,63 @@
-import express from 'express';
-import redis from 'redis';
-import { promisify } from 'util';
+import kue from 'kue';
+import { expect } from 'chai';
+import createPushNotificationsJobs from './8-job';
 
-// utils =================================================
+const queue = kue.createQueue();
 
-const listProducts = [
+const jobs = [
   {
-    itemId: 1,
-    itemName: 'Suitcase 250',
-    price: 50,
-    initialAvailableQuantity: 4,
-  },
-  {
-    itemId: 2,
-    itemName: 'Suitcase 450',
-    price: 100,
-    initialAvailableQuantity: 10,
-  },
-  {
-    itemId: 3,
-    itemName: 'Suitcase 650',
-    price: 350,
-    initialAvailableQuantity: 2,
-  },
-  {
-    itemId: 4,
-    itemName: 'Suitcase 1050',
-    price: 550,
-    initialAvailableQuantity: 5,
+    phoneNumber: '4153518780',
+    message: 'This is the code 1234 to verify your account',
   },
 ];
 
-function getItemById(id) {
-  return listProducts.filter((item) => item.itemId === id)[0];
-}
+describe('createPushNotificationsJobs', () => {
+  before(() => {
+    queue.testMode.enter();
+  });
 
-// redis ==========================================
+  afterEach(() => {
+    queue.testMode.clear();
+  });
 
-const client = redis.createClient();
-const getAsync = promisify(client.get).bind(client);
+  after(() => {
+    queue.testMode.exit();
+  });
 
-client.on('error', (error) => {
-  console.log(`Redis client not connected to the server: ${error.message}`);
-});
+  it('display a error message if jobs is not an array passing Number', () => {
+    expect(() => {
+      createPushNotificationsJobs(2, queue);
+    }).to.throw('Jobs is not an array');
+    // expect(queue.testMode.job[0]);
+  });
 
-client.on('connect', () => {
-  console.log('Redis client connected to the server');
-});
+  it('display a error message if jobs is not an array passing Object', () => {
+    expect(() => {
+      createPushNotificationsJobs({}, queue);
+    }).to.throw('Jobs is not an array');
+    // expect(queue.testMode.job[0]);
+  });
 
-function reserveStockById(itemId, stock) {
-  client.set(`item.${itemId}`, stock);
-}
+  it('display a error message if jobs is not an array passing String', () => {
+    expect(() => {
+      createPushNotificationsJobs('Hello', queue);
+    }).to.throw('Jobs is not an array');
+    // expect(queue.testMode.job[0]);
+  });
 
-async function getCurrentReservedStockById(itemId) {
-  const stock = await getAsync(`item.${itemId}`);
-  return stock;
-}
+  it('should NOT display a error message if jobs is an array with empty array', () => {
+    const ret = createPushNotificationsJobs([], queue);
+    expect(ret).to.equal(undefined);
+    // expect(queue.testMode.job[0]);
+  });
 
-// express =============================================
-
-const app = express();
-const port = 1245;
-
-const notFound = { status: 'Product not found' };
-
-app.listen(port, () => {
-  console.log(`app listening at http://localhost:${port}`);
-});
-
-app.get('/list_products', (req, res) => {
-  res.json(listProducts);
-});
-
-app.get('/list_products/:itemId', async (req, res) => {
-  const itemId = Number(req.params.itemId);
-  const item = getItemById(itemId);
-
-  if (!item) {
-    res.json(notFound);
-    return;
-  }
-
-  const currentStock = await getCurrentReservedStockById(itemId);
-  const stock = currentStock !== null ? currentStock : item.initialAvailableQuantity;
-
-  item.currentQuantity = stock;
-  res.json(item);
-});
-
-app.get('/reserve_product/:itemId', async (req, res) => {
-  const itemId = Number(req.params.itemId);
-  const item = getItemById(itemId);
-  const noStock = { status: 'Not enough stock available', itemId };
-  const reservationConfirmed = { status: 'Reservation confirmed', itemId };
-
-  if (!item) {
-    res.json(notFound);
-    return;
-  }
-
-  let currentStock = await getCurrentReservedStockById(itemId);
-  if (currentStock === null) currentStock = item.initialAvailableQuantity;
-
-  if (currentStock <= 0) {
-    res.json(noStock);
-    return;
-  }
-
-  reserveStockById(itemId, Number(currentStock) - 1);
-
-  res.json(reservationConfirmed);
+  it('create two new jobs to the queue', () => {
+    queue.createJob('myJob', { foo: 'bar' }).save();
+    queue.createJob('anotherJob', { baz: 'bip' }).save();
+    expect(queue.testMode.jobs.length).to.equal(2);
+    expect(queue.testMode.jobs[0].type).to.equal('myJob');
+    expect(queue.testMode.jobs[0].data).to.eql({ foo: 'bar' });
+    expect(queue.testMode.jobs[1].type).to.equal('anotherJob');
+    expect(queue.testMode.jobs[1].data).to.eql({ baz: 'bip' });
+  });
 });
